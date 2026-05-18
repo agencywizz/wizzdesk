@@ -319,6 +319,12 @@ services:
 
   wizzdesk_frontend:
     image: wizzdesk-frontend:local
+    environment:
+      VITE_API_URL: https://crm.${FRONTEND_DOMAIN}
+      VITE_AUTH_API_URL: https://auth.${FRONTEND_DOMAIN}
+      VITE_WS_URL: https://crm.${FRONTEND_DOMAIN}
+      VITE_EVOAI_API_URL: https://core.${FRONTEND_DOMAIN}
+      VITE_AGENT_PROCESSOR_URL: https://crm.${FRONTEND_DOMAIN}
     networks:
       - traefik_public
     deploy:
