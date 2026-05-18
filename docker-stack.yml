@@ -3,107 +3,25 @@ version: "3.8"
 # =============================================================================
 # WizzDesk — Docker Swarm Stack
 # =============================================================================
-# 1. Ajusta todos os CHANGE_ME_* abaixo
-# 2. Constrói as imagens: bash build-images.sh
-# 3. Deploy: docker stack deploy -c docker-stack.yml wizzdesk
-# 4. Seed (primeira vez): bash seed.sh
+# Credentials are never stored here. Set them in Portainer environment variables
+# or in a .env file on the server (never commit .env to git).
+#
+# Deploy:
+#   docker stack deploy -c docker-stack.yml wizzdesk
 # =============================================================================
 
 services:
 
-  # ---------------------------------------------------------------------------
-  # Infrastructure
-  # ---------------------------------------------------------------------------
-  postgres:
+  wizzdesk_postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: evo_community
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: kazuki0611
+      POSTGRES_DB: ${POSTGRES_DATABASE}
+      POSTGRES_USER: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - wizzdesk_postgres:/var/lib/postgresql/data
+      - wizzdesk_postgres_data:/var/lib/postgresql/data
     networks:
       - wizzdesk_internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
-      restart_policy:
-        condition: on-failure
-
-  redis:
-    image: redis:alpine
-    command: ["sh", "-c", "redis-server --requirepass fc4a51a0f7a5cdeb82409dccf9f761727690e90a --appendonly yes"]
-    volumes:
-      - wizzdesk_redis:/data
-    networks:
-      - wizzdesk_internal
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "fc4a51a0f7a5cdeb82409dccf9f761727690e90a", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
-      restart_policy:
-        condition: on-failure
-
-  # ---------------------------------------------------------------------------
-  # Auth Service — Port 3001 → auth.desk.wizzcomms.com
-  # ---------------------------------------------------------------------------
-  evo-auth:
-    image: wizzdesk/evo-auth:latest
-    command: bash -c "bundle exec rails db:prepare && bundle exec rails s -p 3001 -b 0.0.0.0"
-    environment:
-      RAILS_ENV: production
-      RAILS_MAX_THREADS: "5"
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_USERNAME: postgres
-      POSTGRES_PASSWORD: kazuki0611
-      POSTGRES_DATABASE: evo_community
-      REDIS_URL: redis://:fc4a51a0f7a5cdeb82409dccf9f761727690e90a@redis:6379/1
-      SECRET_KEY_BASE: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      JWT_SECRET_KEY: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      MFA_ISSUER: WizzDesk
-      FRONTEND_URL: https://desk.wizzcomms.com
-      DOORKEEPER_JWT_SECRET_KEY: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      DOORKEEPER_JWT_ALGORITHM: hs256
-      DOORKEEPER_JWT_ISS: evo-auth-service
-      DOORKEEPER_JWT_AUD: "[]"
-      EVOAI_CRM_API_TOKEN: 85577f7915ac05860037f432ccb756ef942c1e3aa0af17a9
-      MAILER_SENDER_EMAIL: support@wizzcomms.com
-      SMTP_ADDRESS: smtp.resend.com
-      SMTP_PORT: "587"
-      SMTP_DOMAIN: wizzcomms.com
-      SMTP_AUTHENTICATION: plain
-      SMTP_ENABLE_STARTTLS_AUTO: "true"
-      SMTP_USERNAME: resend
-      SMTP_PASSWORD: re_LRD9eXJs_LGC17JnpqmThc9frUBc1384d
-      ACTIVE_STORAGE_SERVICE: local
-      SIDEKIQ_CONCURRENCY: "5"
-      RAILS_LOG_TO_STDOUT: "true"
-      ENABLE_ACCOUNT_SIGNUP: "false"
-      CORS_ORIGINS: https://desk.wizzcomms.com,https://*.desk.wizzcomms.com
-    networks:
-      - wizzdesk_internal
-      - traefik_public
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 300s
     deploy:
       replicas: 1
       placement:
@@ -111,100 +29,89 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
-        delay: 20s
-        max_attempts: 15
-        window: 120s
+
+  wizzdesk_redis:
+    image: redis:alpine
+    command: ["sh", "-c", "redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes"]
+    volumes:
+      - wizzdesk_redis_data:/data
+    networks:
+      - wizzdesk_internal
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+
+  wizzdesk_gateway:
+    image: wizzdesk-gateway:local
+    environment:
+      AUTH_UPSTREAM: wizzdesk_auth:3001
+      CRM_UPSTREAM: wizzdesk_crm:3000
+      CORE_UPSTREAM: wizzdesk_core:5555
+      PROCESSOR_UPSTREAM: wizzdesk_processor:8000
+      BOT_RUNTIME_UPSTREAM: wizzdesk_bot_runtime:8080
+    networks:
+      - wizzdesk_internal
+      - traefik_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
       labels:
         - traefik.enable=true
         - traefik.swarm.network=traefik_public
-        - traefik.http.services.wizzdesk-auth.loadbalancer.server.port=3001
-        - traefik.http.routers.wizzdesk-auth.rule=Host(`auth.desk.wizzcomms.com`)
-        - traefik.http.routers.wizzdesk-auth.entrypoints=websecure
-        - traefik.http.routers.wizzdesk-auth.tls=true
-        - traefik.http.routers.wizzdesk-auth.tls.certresolver=le
+        - traefik.http.routers.wizzdesk-api.rule=Host(`${API_DOMAIN}`)
+        - traefik.http.routers.wizzdesk-api.entrypoints=websecure
+        - traefik.http.routers.wizzdesk-api.tls=true
+        - traefik.http.routers.wizzdesk-api.tls.certresolver=le
+        - traefik.http.routers.wizzdesk-api.service=wizzdesk-api
+        - traefik.http.services.wizzdesk-api.loadbalancer.server.port=3030
+        - traefik.http.services.wizzdesk-api.loadbalancer.passHostHeader=true
 
-  evo-auth-sidekiq:
-    image: wizzdesk/evo-auth:latest
-    command: bash -c "bundle exec sidekiq"
-    healthcheck:
-      disable: true
+  wizzdesk_auth:
+    image: wizzdesk-auth:local
+    command: sh -c "bundle exec rails db:migrate 2>&1 || echo 'Migration had errors, continuing...'; bundle exec rails s -p 3001 -b 0.0.0.0"
     environment:
       RAILS_ENV: production
-      POSTGRES_HOST: postgres
-      POSTGRES_USERNAME: postgres
-      POSTGRES_PASSWORD: kazuki0611
-      POSTGRES_DATABASE: evo_community
-      REDIS_URL: redis://:fc4a51a0f7a5cdeb82409dccf9f761727690e90a@redis:6379/1
-      SECRET_KEY_BASE: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      JWT_SECRET_KEY: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      DOORKEEPER_JWT_SECRET_KEY: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
+      RAILS_MAX_THREADS: "5"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE}
+      REDIS_URL: ${REDIS_URL}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      BACKEND_URL: https://${API_DOMAIN}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL}
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
       DOORKEEPER_JWT_ALGORITHM: hs256
       DOORKEEPER_JWT_ISS: evo-auth-service
-      DOORKEEPER_JWT_AUD: "[]"
       MFA_ISSUER: WizzDesk
-      FRONTEND_URL: https://desk.wizzcomms.com
-      EVOAI_CRM_API_TOKEN: 85577f7915ac05860037f432ccb756ef942c1e3aa0af17a9
-      RAILS_LOG_TO_STDOUT: "true"
-    networks:
-      - wizzdesk_internal
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
-      restart_policy:
-        condition: any
-        delay: 30s
-        max_attempts: 10
-        window: 120s
-
-  # ---------------------------------------------------------------------------
-  # CRM Service — Port 3000 → crm.desk.wizzcomms.com
-  # ---------------------------------------------------------------------------
-  evo-crm:
-    image: wizzdesk/evo-crm:latest
-    entrypoint: docker/entrypoints/rails.sh
-    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
-    environment:
-      RAILS_ENV: production
-      POSTGRES_HOST: postgres
-      POSTGRES_USERNAME: postgres
-      POSTGRES_PASSWORD: kazuki0611
-      POSTGRES_DATABASE: evo_community
-      REDIS_URL: redis://:fc4a51a0f7a5cdeb82409dccf9f761727690e90a@redis:6379/0
-      SECRET_KEY_BASE: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      JWT_SECRET_KEY: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      BACKEND_URL: https://crm.desk.wizzcomms.com
-      FRONTEND_URL: https://desk.wizzcomms.com
-      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
-      EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
-      BOT_RUNTIME_URL: http://evo-bot-runtime:8080
-      BOT_RUNTIME_SECRET: ece8c33be24e6890740044473186c0891f3293d30159efb6
-      BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
-      EVOAI_CRM_API_TOKEN: 85577f7915ac05860037f432ccb756ef942c1e3aa0af17a9
-      CORS_ORIGINS: https://desk.wizzcomms.com,https://*.desk.wizzcomms.com
-      DISABLE_TELEMETRY: "true"
-      RAILS_LOG_TO_STDOUT: "true"
-      LOG_LEVEL: info
-      ENABLE_ACCOUNT_SIGNUP: "false"
-      ENABLE_PUSH_RELAY_SERVER: "true"
-      ENABLE_INBOX_EVENTS: "true"
-      MAILER_SENDER_EMAIL: support@wizzcomms.com
+      SIDEKIQ_CONCURRENCY: ${SIDEKIQ_CONCURRENCY}
+      ACTIVE_STORAGE_SERVICE: ${ACTIVE_STORAGE_SERVICE}
       SMTP_ADDRESS: smtp.resend.com
+      SMTP_HOST: smtp.resend.com
       SMTP_PORT: "587"
-      SMTP_DOMAIN: wizzcomms.com
+      SMTP_USERNAME: resend
+      SMTP_USER_NAME: resend
+      SMTP_PASSWORD: ${RESEND_API_KEY}
       SMTP_AUTHENTICATION: plain
       SMTP_ENABLE_STARTTLS_AUTO: "true"
-      SMTP_USERNAME: resend
-      SMTP_PASSWORD: re_LRD9eXJs_LGC17JnpqmThc9frUBc1384d
-      ACTIVE_STORAGE_SERVICE: local
-      FB_VERIFY_TOKEN: evolution
-      FACEBOOK_API_VERSION: v23.0
-    volumes:
-      - wizzdesk_crm_storage:/app/storage
+      SMTP_DOMAIN: wizzcomms.com
+      DEFAULT_FROM_EMAIL: ${MAILER_SENDER_EMAIL}
     networks:
       - wizzdesk_internal
-      - traefik_public
     deploy:
       replicas: 1
       placement:
@@ -212,40 +119,84 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
-        delay: 30s
-        max_attempts: 15
-        window: 180s
-      labels:
-       - traefik.enable=true
-       - traefik.swarm.network=traefik_public
-       - traefik.http.services.wizzdesk-crm.loadbalancer.server.port=3000
-       - traefik.http.routers.wizzdesk-crm.rule=Host(`crm.desk.wizzcomms.com`)
-       - traefik.http.routers.wizzdesk-crm.entrypoints=websecure
-       - traefik.http.routers.wizzdesk-crm.tls=true
-       - traefik.http.routers.wizzdesk-crm.tls.certresolver=le
 
-  evo-crm-sidekiq:
-    image: wizzdesk/evo-crm:latest
-    entrypoint: docker/entrypoints/rails.sh
-    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+  wizzdesk_auth_sidekiq:
+    image: wizzdesk-auth:local
+    command: sh -c "bundle exec sidekiq -C config/sidekiq.yml"
     healthcheck:
       disable: true
     environment:
       RAILS_ENV: production
-      POSTGRES_HOST: postgres
-      POSTGRES_USERNAME: postgres
-      POSTGRES_PASSWORD: kazuki0611
-      POSTGRES_DATABASE: evo_community
-      REDIS_URL: redis://:fc4a51a0f7a5cdeb82409dccf9f761727690e90a@redis:6379/0
-      SECRET_KEY_BASE: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      JWT_SECRET_KEY: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
-      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
-      EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
-      BOT_RUNTIME_URL: http://evo-bot-runtime:8080
-      BOT_RUNTIME_SECRET: ece8c33be24e6890740044473186c0891f3293d30159efb6
-      BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
-      EVOAI_CRM_API_TOKEN: 85577f7915ac05860037f432ccb756ef942c1e3aa0af17a9
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE}
+      REDIS_URL: ${REDIS_URL}
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: evo-auth-service
+      MFA_ISSUER: WizzDesk
+      SIDEKIQ_CONCURRENCY: ${SIDEKIQ_CONCURRENCY}
+      ACTIVE_STORAGE_SERVICE: ${ACTIVE_STORAGE_SERVICE}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      BACKEND_URL: https://${API_DOMAIN}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL}
+      SMTP_ADDRESS: smtp.resend.com
+      SMTP_HOST: smtp.resend.com
+      SMTP_PORT: "587"
+      SMTP_USERNAME: resend
+      SMTP_USER_NAME: resend
+      SMTP_PASSWORD: ${RESEND_API_KEY}
+      SMTP_AUTHENTICATION: plain
+      SMTP_ENABLE_STARTTLS_AUTO: "true"
+      SMTP_DOMAIN: wizzcomms.com
+      DEFAULT_FROM_EMAIL: ${MAILER_SENDER_EMAIL}
+    networks:
+      - wizzdesk_internal
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+
+  wizzdesk_crm:
+    image: wizzdesk-crm:local
+    command: sh -c "bundle install && until wget -qO- http://wizzdesk_auth:3001/health >/dev/null 2>&1; do echo 'Waiting for auth...'; sleep 5; done; bundle exec rails db:migrate 2>&1 || echo 'Migration had errors, continuing...'; bundle exec rails s -p 3000 -b 0.0.0.0"
+    environment:
+      RAILS_ENV: production
+      RAILS_SERVE_STATIC_FILES: "true"
       RAILS_LOG_TO_STDOUT: "true"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE}
+      REDIS_URL: ${REDIS_URL}
+      EVO_AUTH_SERVICE_URL: http://wizzdesk_auth:3001
+      EVO_AI_CORE_SERVICE_URL: http://wizzdesk_core:5555
+      BACKEND_URL: https://${API_DOMAIN}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      DISABLE_TELEMETRY: "true"
+      LOG_LEVEL: info
+      ENABLE_ACCOUNT_SIGNUP: "true"
+      ENABLE_PUSH_RELAY_SERVER: "true"
+      ENABLE_INBOX_EVENTS: "true"
+      BOT_RUNTIME_URL: http://wizzdesk_bot_runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://wizzdesk_crm:3000
     networks:
       - wizzdesk_internal
     deploy:
@@ -255,33 +206,57 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
-        delay: 30s
-        max_attempts: 10
-        window: 120s
 
-  # ---------------------------------------------------------------------------
-  # Core Service — Port 5555 → core.desk.wizzcomms.com
-  # ---------------------------------------------------------------------------
-  evo-core:
-    image: wizzdesk/evo-core:latest
+  wizzdesk_crm_sidekiq:
+    image: wizzdesk-crm:local
+    command: sh -c "bundle install && bundle exec sidekiq -C config/sidekiq.yml"
     environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_USER: postgres
-      DB_PASSWORD: kazuki0611
-      DB_NAME: evo_community
-      DB_SSLMODE: disable
+      RAILS_ENV: production
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE}
+      REDIS_URL: ${REDIS_URL}
+      EVO_AUTH_SERVICE_URL: http://wizzdesk_auth:3001
+      EVO_AI_CORE_SERVICE_URL: http://wizzdesk_core:5555
+      BOT_RUNTIME_URL: http://wizzdesk_bot_runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://wizzdesk_crm:3000
+    networks:
+      - wizzdesk_internal
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+
+  wizzdesk_core:
+    image: wizzdesk-core:local
+    environment:
+      DB_HOST: ${POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT}
+      DB_USER: ${POSTGRES_USERNAME}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DATABASE}
+      DB_SSLMODE: ${POSTGRES_SSLMODE}
       PORT: "5555"
-      JWT_SECRET_KEY: d2263091d4b3aebaf4e15d8b1c3f92526568b4312b5676a3d522c903506e27a4
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       JWT_ALGORITHM: HS256
-      EVOLUTION_BASE_URL: http://evo-crm:3000
-      EVO_AUTH_BASE_URL: http://evo-auth:3001
-      AI_PROCESSOR_URL: http://evo-processor:8000
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      EVOLUTION_BASE_URL: http://wizzdesk_crm:3000
+      EVO_AUTH_BASE_URL: http://wizzdesk_auth:3001
+      AI_PROCESSOR_URL: http://wizzdesk_processor:8000
       AI_PROCESSOR_VERSION: v1
-      ENCRYPTION_KEY: QDY0wxfDPg9ttCXPsLHUXSyZxS2Frhnb9eOUsQpsSOk=
     networks:
       - wizzdesk_internal
-      - traefik_public
     deploy:
       replicas: 1
       placement:
@@ -289,41 +264,35 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
-        delay: 15s
-        max_attempts: 10
-        window: 60s
-      labels:
-       - traefik.enable=true
-       - traefik.swarm.network=traefik_public
-       - traefik.http.services.wizzdesk-core.loadbalancer.server.port=5555
-       - traefik.http.routers.wizzdesk-core.rule=Host(`core.desk.wizzcomms.com`)
-       - traefik.http.routers.wizzdesk-core.entrypoints=websecure
-       - traefik.http.routers.wizzdesk-core.tls=true
-       - traefik.http.routers.wizzdesk-core.tls.certresolver=le
 
-  # ---------------------------------------------------------------------------
-  # Processor Service — Port 8000 (interno)
-  # ---------------------------------------------------------------------------
-  evo-processor:
-    image: wizzdesk/evo-processor:latest
+  wizzdesk_processor:
+    image: wizzdesk-processor:local
+    command: sh -c "alembic upgrade head 2>&1 || echo 'Alembic migration had errors, continuing...'; python -m scripts.run_seeders; uvicorn src.main:app --host $$HOST --port $$PORT"
     environment:
-      POSTGRES_CONNECTION_STRING: postgresql://postgres:kazuki0611@postgres:5432/evo_community
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: fc4a51a0f7a5cdeb82409dccf9f761727690e90a
+      POSTGRES_CONNECTION_STRING: ${PROCESSOR_POSTGRES_CONNECTION_STRING}
+      REDIS_HOST: ${PROCESSOR_REDIS_HOST}
+      REDIS_PORT: ${PROCESSOR_REDIS_PORT}
+      REDIS_PASSWORD: ${PROCESSOR_REDIS_PASSWORD}
       REDIS_SSL: "false"
-      HOST: "0.0.0.0"
+      REDIS_DB: ${PROCESSOR_REDIS_DB}
+      REDIS_KEY_PREFIX: "a2a:"
+      REDIS_TTL: "3600"
+      HOST: 0.0.0.0
       PORT: "8000"
       DEBUG: "false"
-      ORGANIZATION_NAME: WizzDesk
-      ORGANIZATION_URL: https://desk.wizzcomms.com
-      EVO_AI_CRM_URL: http://evo-crm:3000
-      CORE_SERVICE_URL: http://evo-core:5555/api/v1
-      ENCRYPTION_KEY: QDY0wxfDPg9ttCXPsLHUXSyZxS2Frhnb9eOUsQpsSOk=
-      EVOAI_CRM_API_TOKEN: 85577f7915ac05860037f432ccb756ef942c1e3aa0af17a9
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      EVO_AI_CRM_URL: http://wizzdesk_crm:3000
+      CORE_SERVICE_URL: http://wizzdesk_core:5555/api/v1
+      APP_URL: https://${API_DOMAIN}
       API_TITLE: WizzDesk API
       API_DESCRIPTION: WizzDesk API
-      APP_URL: https://desk.wizzcomms.com
+      API_VERSION: 1.0.0
+      API_URL: https://${API_DOMAIN}
+      ORGANIZATION_NAME: Wizz! comms.
+      TOOLS_CACHE_ENABLED: "true"
+      TOOLS_CACHE_TTL: "3600"
     volumes:
       - wizzdesk_processor_logs:/app/logs
     networks:
@@ -335,20 +304,15 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
-        delay: 15s
-        max_attempts: 10
-        window: 60s
 
-  # ---------------------------------------------------------------------------
-  # Bot Runtime — Port 8080 (interno)
-  # ---------------------------------------------------------------------------
-  evo-bot-runtime:
-    image: wizzdesk/evo-bot-runtime:latest
+  wizzdesk_bot_runtime:
+    image: wizzdesk-bot-runtime:local
     environment:
-      LISTEN_ADDR: "0.0.0.0:8080"
-      REDIS_URL: redis://:fc4a51a0f7a5cdeb82409dccf9f761727690e90a@redis:6379
-      AI_PROCESSOR_URL: http://evo-processor:8000
-      BOT_RUNTIME_SECRET: ece8c33be24e6890740044473186c0891f3293d30159efb6
+      LISTEN_ADDR: 0.0.0.0:8080
+      REDIS_URL: ${REDIS_URL}
+      AI_PROCESSOR_URL: http://wizzdesk_processor:8000
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      AI_CALL_TIMEOUT_SECONDS: "30"
     networks:
       - wizzdesk_internal
     deploy:
@@ -358,23 +322,16 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
-        delay: 15s
-        max_attempts: 10
-        window: 60s
 
-  # ---------------------------------------------------------------------------
-  # Frontend — Port 80 → desk.wizzcomms.com + *.desk.wizzcomms.com
-  # ---------------------------------------------------------------------------
-  evo-frontend:
-    image: wizzdesk/evo-frontend:latest
+  wizzdesk_frontend:
+    image: wizzdesk-frontend:local
     environment:
-      VITE_API_URL: https://crm.desk.wizzcomms.com
-      VITE_AUTH_API_URL: https://auth.desk.wizzcomms.com
-      VITE_WS_URL: wss://crm.desk.wizzcomms.com
-      VITE_EVOAI_API_URL: https://core.desk.wizzcomms.com
-      VITE_AGENT_PROCESSOR_URL: https://core.desk.wizzcomms.com
+      VITE_APP_ENV: production
+      VITE_API_URL: https://${API_DOMAIN}
+      VITE_AUTH_API_URL: https://${API_DOMAIN}
+      VITE_EVOAI_API_URL: https://${API_DOMAIN}
+      VITE_AGENT_PROCESSOR_URL: https://${API_DOMAIN}
     networks:
-      - wizzdesk_internal
       - traefik_public
     deploy:
       replicas: 1
@@ -383,23 +340,20 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
-        delay: 10s
-        max_attempts: 10
-        window: 60s
       labels:
-       - traefik.enable=true
-       - traefik.swarm.network=traefik_public
-       - traefik.http.services.wizzdesk-frontend.loadbalancer.server.port=80
-       - traefik.http.routers.wizzdesk.rule=Host(`desk.wizzcomms.com`) || HostRegexp(`{subdomain:[a-z0-9-]+}.desk.wizzcomms.com`)
-       - traefik.http.routers.wizzdesk.entrypoints=websecure
-       - traefik.http.routers.wizzdesk.tls=true
-       - traefik.http.routers.wizzdesk.tls.certresolver=le
-       - traefik.http.routers.wizzdesk.priority=1
+        - traefik.enable=true
+        - traefik.swarm.network=traefik_public
+        - traefik.http.routers.wizzdesk.rule=Host(`${FRONTEND_DOMAIN}`)
+        - traefik.http.routers.wizzdesk.entrypoints=websecure
+        - traefik.http.routers.wizzdesk.tls=true
+        - traefik.http.routers.wizzdesk.tls.certresolver=le
+        - traefik.http.routers.wizzdesk.service=wizzdesk
+        - traefik.http.services.wizzdesk.loadbalancer.server.port=80
+        - traefik.http.services.wizzdesk.loadbalancer.passHostHeader=true
 
 volumes:
-  wizzdesk_postgres:
-  wizzdesk_redis:
-  wizzdesk_crm_storage:
+  wizzdesk_postgres_data:
+  wizzdesk_redis_data:
   wizzdesk_processor_logs:
 
 networks:
