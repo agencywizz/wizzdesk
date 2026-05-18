@@ -3,7 +3,8 @@
 	url = https://github.com/EvolutionAPI/evo-auth-service-community.git
 [submodule "evo-ai-crm-community"]
 	path = evo-ai-crm-community
-	url = https://github.com/EvolutionAPI/evo-ai-crm-community.git
+	url = https://github.com/agencywizz/evo-ai-crm-community.git
+	branch = wizz
 [submodule "evo-ai-frontend-community"]
 	path = evo-ai-frontend-community
 	url = https://github.com/agencywizz/evo-ai-frontend-community.git
