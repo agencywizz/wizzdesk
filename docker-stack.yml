@@ -44,7 +44,7 @@ services:
         condition: any
 
   wizzdesk_auth:
-    image: wizzdesk/evo-auth:latest
+    image: wizzdesk-auth:local
     command: sh -c "bundle exec rails db:migrate 2>&1 || true; bundle exec rails s -p 3001 -b 0.0.0.0"
     environment:
       RAILS_ENV: production
@@ -96,7 +96,7 @@ services:
         - traefik.http.services.wizzdesk-auth.loadbalancer.server.port=3001
 
   wizzdesk_auth_sidekiq:
-    image: wizzdesk/evo-auth:latest
+    image: wizzdesk-auth:local
     command: sh -c "bundle exec sidekiq"
     healthcheck:
       disable: true
@@ -136,7 +136,7 @@ services:
         condition: any
 
   wizzdesk_crm:
-    image: wizzdesk/evo-crm:latest
+    image: wizzdesk-crm:local
     entrypoint: docker/entrypoints/rails.sh
     command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
     environment:
@@ -193,7 +193,7 @@ services:
         - traefik.http.services.wizzdesk-crm.loadbalancer.server.port=3000
 
   wizzdesk_crm_sidekiq:
-    image: wizzdesk/evo-crm:latest
+    image: wizzdesk-crm:local
     entrypoint: docker/entrypoints/rails.sh
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     healthcheck:
@@ -225,7 +225,7 @@ services:
         condition: any
 
   wizzdesk_core:
-    image: wizzdesk/evo-core:latest
+    image: wizzdesk-core:local
     environment:
       DB_HOST: wizzdesk_postgres
       DB_PORT: "5432"
@@ -261,7 +261,7 @@ services:
         - traefik.http.services.wizzdesk-core.loadbalancer.server.port=5555
 
   wizzdesk_processor:
-    image: wizzdesk/evo-processor:latest
+    image: wizzdesk-processor:local
     command: sh -c "alembic upgrade head 2>&1 || true; python -m scripts.run_seeders; uvicorn src.main:app --host 0.0.0.0 --port 8000"
     environment:
       POSTGRES_CONNECTION_STRING: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@wizzdesk_postgres:5432/${POSTGRES_DATABASE}
@@ -300,7 +300,7 @@ services:
         condition: any
 
   wizzdesk_bot_runtime:
-    image: wizzdesk/evo-bot-runtime:latest
+    image: wizzdesk-bot-runtime:local
     environment:
       LISTEN_ADDR: 0.0.0.0:8080
       REDIS_URL: ${REDIS_URL}
@@ -318,7 +318,7 @@ services:
         condition: any
 
   wizzdesk_frontend:
-    image: wizzdesk/evo-frontend:latest
+    image: wizzdesk-frontend:local
     networks:
       - traefik_public
     deploy:
